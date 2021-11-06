@@ -8,7 +8,7 @@
  * 
  */
 #include <SerialRelay.h>
-#define START_RELAY_ON
+//#define START_RELAY_ON
 
 // Which Arduino pin is connected to relay board's Data and Clock
 #define RELAY_DATA 7
@@ -56,8 +56,8 @@ SerialRelay relays(RELAY_DATA, RELAY_CLK, NumModules);
 
 #include <TimerInterrupt.h>
 
-#define LIGHT_HOURS         14400000  // How long before trigger ISR
-#define DARK_HOURS          23400000  // How long before trigger ISR
+#define LIGHT_HOURS         64800000  // How long before trigger ISR
+#define DARK_HOURS          21600000  // How long before trigger ISR
 #define TIMER1_DURATION_MS  0         // Timer1 runs forever
 
 

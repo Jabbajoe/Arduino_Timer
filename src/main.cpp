@@ -1,5 +1,27 @@
 
 /**
+ * @brief DEBUG MODE
+ * For DEBUG, uncomment this line 
+ * 
+ */
+//#define DEBUG_MODE
+
+
+/**
+ * @brief USER's LIGHT SCHEDULE
+ * Define the light patterns you want to use
+ * 
+ * LIGHT_HOURS: How many hours of light
+ * DARK_HOURS: How many hours of dark
+ * 
+ */
+#define LIGHT_HOURS 18  // Hours with lights on
+#define DARK_HOURS  6   // Hours with lights off
+// If the relay must start activated, uncomment this line
+#define START_RELAY_ON
+
+
+/**
  * @brief SerialRelay library
  * 
  * 
@@ -8,7 +30,6 @@
  * 
  */
 #include <SerialRelay.h>
-//#define START_RELAY_ON
 
 // Which Arduino pin is connected to relay board's Data and Clock
 #define RELAY_DATA 7
@@ -33,7 +54,7 @@ SerialRelay relays(RELAY_DATA, RELAY_CLK, NumModules);
  * @notes:
  * - Now we can use these new 16 ISR-based timers, while consuming 
  * only 1 hardware Timer. Their independently-selected, maximum interval 
- * is practically unlimited (limited only by unsigned long miliseconds)
+ * is practically unlimited (limited only by unsigned long milliseconds)
  * The accuracy is nearly perfect compared to software timers. The most 
  * important feature is they're ISR-based timers. Therefore, their executions 
  * are not blocked by bad-behaving functions / tasks.
@@ -42,11 +63,10 @@ SerialRelay relays(RELAY_DATA, RELAY_CLK, NumModules);
  * - Using ATmega328 used in UNO => 16MHz CPU clock
  * 
  */
-// These define's must be placed at the beginning before #include "TimerInterrupt.h"
+// This #define must be placed at the beginning before #include "TimerInterrupt.h"
 // _TIMERINTERRUPT_LOGLEVEL_ from 0 to 4
 // Don't define _TIMERINTERRUPT_LOGLEVEL_ > 0. 
 // Only for special ISR debugging only. Can hang the system.
-#define TIMER_INTERRUPT_DEBUG         0
 #define _TIMERINTERRUPT_LOGLEVEL_     0
 // Timer0 is used for micros(), millis(), delay(), etc and can't be used
 // Select Timer 1-2 for UNO, 1-5 for MEGA, 1,3,4 for 16u4/32u4
@@ -56,9 +76,8 @@ SerialRelay relays(RELAY_DATA, RELAY_CLK, NumModules);
 
 #include <TimerInterrupt.h>
 
-#define LIGHT_HOURS         64800000  // How long before trigger ISR
-#define DARK_HOURS          21600000  // How long before trigger ISR
-#define TIMER1_DURATION_MS  0         // Timer1 runs forever
+#define TIMER_TRIGGER_MS    3600000 // How long before trigger ISR
+#define TIMER1_DURATION_MS  0       // Timer1 runs forever
 
 
 /**
@@ -82,85 +101,122 @@ SerialRelay relays(RELAY_DATA, RELAY_CLK, NumModules);
  */
 void Trigger_relay()
 {
+  static uint8_t hours = 0;
+  hours++;
+
 #ifdef START_RELAY_ON
-  static bool toggle_relay_1 = false;
-#else
   static bool toggle_relay_1 = true;
+#else
+  static bool toggle_relay_1 = false;
 #endif
 
-  toggle_relay = toggle_relay_1;
+  if (
+    (toggle_relay_1 == true && hours == LIGHT_HOURS) || 
+    (toggle_relay_1 == false && hours == DARK_HOURS)
+    )
+    {
+      // Reset couting hours
+      hours = 0;
+      // Update toggle_relay
+      toggle_relay_1 = !toggle_relay_1;
 
-#if (TIMER_INTERRUPT_DEBUG > 1)
-  Serial.print("ITimer1 called, millis() = "); Serial.println(millis());
-#endif
+      #ifdef DEBUG_MODE
+        digitalWrite(LED_BUILTIN, toggle_relay_1);
+      #endif
 
-  byte _data[0];
-  _data[0] = 0;
-  
-  if(toggle_relay_1){
-    byte mask = (1 << (0));
-    _data[0] |= mask;
-  } else {
-    byte mask = ~(1 << (0));
-    _data[0] &= mask;
-  }
-  
-  // send I2C pulse
-  byte mask_reset = 0x80; // reset
-  for(int i=1 ; i <= 8 ; i++){
-    // set Data line
-    if(_data[0] & mask_reset)
-      digitalWrite(7, HIGH);
-    else
+      /**
+       * @brief Arduino-Relay communication
+       * Serial communication via I2C protocol
+       * 
+       */
+      byte _data[0];
+      _data[0] = 0;
+      // Define the command to be sent to relay (Turn on or Turn off)
+      if(toggle_relay_1){
+        byte mask = (1 << (0));
+        _data[0] |= mask;
+      } else {
+        byte mask = ~(1 << (0));
+        _data[0] &= mask;
+      }
+      // send I2C pulse
+      byte mask_reset = 0x80; // reset
+      for(int i=1 ; i <= 8 ; i++){
+        // set Data line
+        if(_data[0] & mask_reset)
+          digitalWrite(7, HIGH);
+        else
+          digitalWrite(7, LOW);
+        // delay between Data and Clock signals
+        delayMicroseconds(SERIAL_RELAY_DELAY_DATA);
+        // set Clock line
+        digitalWrite(8, HIGH); // rising edge
+        if(i == 8)
+          // latch timing
+          delayMicroseconds(SERIAL_RELAY_DELAY_LATCH);
+        else
+          // shift timing
+          delayMicroseconds(SERIAL_RELAY_DELAY_CLOCK_HIGH);
+        digitalWrite(8, LOW);
+        // it is acceptable to have 5µs delay after the last bit has been sent
+        delayMicroseconds(SERIAL_RELAY_DELAY_CLOCK_LOW);
+        
+        mask_reset >>= 1; // update mask
+      }
+      // Reset to maintain LOW level when not in use
       digitalWrite(7, LOW);
-    // delay between Data and Clock signals
-    delayMicroseconds(SERIAL_RELAY_DELAY_DATA);
-    // set Clock line
-    digitalWrite(8, HIGH); // rising edge
-    if(i == 8)
-      // latch timming
-      delayMicroseconds(SERIAL_RELAY_DELAY_LATCH);
-    else
-      // shift timming
-      delayMicroseconds(SERIAL_RELAY_DELAY_CLOCK_HIGH);
-    digitalWrite(8, LOW);
-    // it is acceptable to have 5µs delay after the last bit has been sent
-    delayMicroseconds(SERIAL_RELAY_DELAY_CLOCK_LOW);
-    
-    mask_reset >>= 1; // update mask
-  }
-  // Reset to maintain LOW level when not in use
-  digitalWrite(7, LOW);
-  // Toggle flag in order to toggle relay in the next Trigger_relay call
-  toggle_relay_1 = !toggle_relay_1;
+    }
 }
 
 
 void setup()
 {
+  /**
+   * @note
+   * - "Opening the serial port (starting serial monitor) auto resets 
+   * the Arduino. 
+   * You can temporally disable the auto reset by putting a 10uf capacitor from 
+   * reset to ground or, on some Arduinos, there is a jumper on the PCB that 
+   * you can cut. You will need to re-enable the auto reset or manually reset 
+   * the board to upload new code, though"
+   * [source: 
+   * https://forum.arduino.cc/t/millis-resets-every-time-i-open-the-serial-monitor/518635]
+   * 
+   * "The Arduino uses the RTS (Request To Send) (and I think 
+   * DTR (Data Terminal Ready)) signals to auto-reset. 
+   * If you get a serial terminal that allows you to change the flow control 
+   * settings you can change this functionality."
+   * [source: 
+   * https://arduino.stackexchange.com/questions/439/why-does-starting-the-serial-monitor-restart-the-sketch]
+   * 
+   */
   Serial.begin(115200);
   while (!Serial);
+  Serial.println("#WARNING: ARDUINO HAS BEEN RESET");
   Serial.print(F("\nStarting ESTUFA on "));
   Serial.println(BOARD_TYPE);
   Serial.print(F("CPU Frequency = ")); 
   Serial.print(F_CPU / 1000000); 
   Serial.println(F(" MHz"));
 
+// DEBUG ONLY
+#ifdef DEBUG_MODE
+  // Config Arduino LED
+  pinMode(LED_BUILTIN, OUTPUT);
+  #ifdef START_RELAY_ON
+    digitalWrite(LED_BUILTIN, HIGH);
+  #else
+    digitalWrite(LED_BUILTIN, LOW);
+  #endif
+#endif
+
   // Initialize the TimerInterrupt object
   ITimer1.init();
-#ifdef START_RELAY_ON
   if (ITimer1.attachInterruptInterval(
-    LIGHT_HOURS,
+    TIMER_TRIGGER_MS,
     Trigger_relay,
     TIMER1_DURATION_MS
   ))
-#else
-  if (ITimer1.attachInterruptInterval(
-    DARK_HOURS,
-    Trigger_relay,
-    TIMER1_DURATION_MS
-  ))
-#endif
   {
     Serial.print(F("Starting  ITimer1 OK, millis() = ")); 
     Serial.println(millis());
@@ -180,26 +236,8 @@ void setup()
   relays.SetRelay(1, SERIAL_RELAY_ON, 1); // Start with relay on
 #endif
 
-
 }
 
 void loop()
 {
-  // Persist the last toggle_relay status
-  static bool toggle_relay_last = toggle_relay;
-
-  // If there is a status change
-  if (toggle_relay_last != toggle_relay) {
-    // Persist the new toggle_relay status
-    toggle_relay_last = toggle_relay;
-    // If the new status is TRUE (i.e. Relay coil energized)
-    if (toggle_relay)
-      // Set interrupt to trigger after LIGHT_HOURS miliseconds
-      ITimer1.setInterval(LIGHT_HOURS, Trigger_relay);
-    // If the new status is FALSE (i.e. Relay coil de-energized)
-    else
-      // Set interrupt to trigger after DARK_HOURS miliseconds
-      ITimer1.setInterval(DARK_HOURS, Trigger_relay);
-  }
-
 }
